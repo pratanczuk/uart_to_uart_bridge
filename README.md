@@ -18,7 +18,7 @@ Performance Considerations
 Queue processing ensures minimal CPU usage and prevents data loss.
 
 Project Structure
-
+```
 uart_to_uart_bridge/
 ├── main/
 │   ├── uart_bridge_isr.c  # Main UART bridge implementation with ISR 
@@ -27,6 +27,7 @@ uart_to_uart_bridge/
 ├── sdkconfig              # ESP-IDF configuration
 ├── README.md              # Project documentation
 └── .gitignore             # Git ignore file
+```
 
 Installation
 
@@ -37,12 +38,12 @@ ESP-IDF installed (export.sh sourced)
 ESP32 board connected via USB
 
 Build & Flash
-
+```
 idf.py set-target esp32
 idf.py build
 idf.py flash
 idf.py monitor
-
+```
 Configuration
 
 You can configure the debug logs by modifying:
@@ -54,9 +55,9 @@ Usage
 The firmware automatically forwards data between UART1 and UART2.
 
 You can monitor UART logs via:
-
+```
 idf.py monitor
-
+```
 License
 
 This project is released under the MIT License.
