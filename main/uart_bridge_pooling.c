@@ -2,7 +2,6 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "driver/uart.h"
-//#include "driver/gpio.h"
 #include <string.h>
 
 #define UART1_TX_PIN 1
@@ -18,9 +17,12 @@
 
 #define BUF_SIZE (128)
 
-
 static const char *TAG = "UART_BRIDGE";
 
+/**
+ * @brief Periodically logs a keep-alive message.
+ * @param arg Unused parameter.
+ */
 void keep_alive_task(void *arg) {
     while (1) {
         ESP_LOGI(TAG, "Keep-alive message");
@@ -31,13 +33,20 @@ void keep_alive_task(void *arg) {
 static QueueHandle_t uart1_queue;
 static QueueHandle_t uart2_queue;
 static SemaphoreHandle_t uart1_semaphore;
-
 static SemaphoreHandle_t uart2_semaphore;
+
+/**
+ * @brief Structure to store UART packets.
+ */
 typedef struct {
-    uint8_t data[BUF_SIZE];
-    int len;
+    uint8_t data[BUF_SIZE]; // Data buffer
+    int len; // Data length
 } uart_packet_t;
 
+/**
+ * @brief Task to forward data from UART1 to UART2.
+ * @param arg Unused parameter.
+ */
 void uart_forward_task_uart1_to_uart2(void *arg) {
     uart_packet_t packet;
     while (1) {
@@ -52,6 +61,10 @@ void uart_forward_task_uart1_to_uart2(void *arg) {
     }
 }
 
+/**
+ * @brief Task to forward data from UART2 to UART1.
+ * @param arg Unused parameter.
+ */
 void uart_forward_task_uart2_to_uart1(void *arg) {
     uart_packet_t packet;
     while (1) {
@@ -66,6 +79,10 @@ void uart_forward_task_uart2_to_uart1(void *arg) {
     }
 }
 
+/**
+ * @brief Task to read data from UART1 and queue it for processing.
+ * @param arg Unused parameter.
+ */
 void uart_rx_task_uart1(void *arg) {
     uart_packet_t packet;
     while (1) {
@@ -78,6 +95,10 @@ void uart_rx_task_uart1(void *arg) {
     }
 }
 
+/**
+ * @brief Task to read data from UART2 and queue it for processing.
+ * @param arg Unused parameter.
+ */
 void uart_rx_task_uart2(void *arg) {
     uart_packet_t packet;
     while (1) {
@@ -91,7 +112,7 @@ void uart_rx_task_uart2(void *arg) {
 }
 
 /**
- * @brief Initializes UART configuration
+ * @brief Initializes UART configuration.
  */
 void uart_init() {
     ESP_LOGI(TAG, "Initializing UART...");
@@ -118,9 +139,11 @@ void uart_init() {
     });
     uart_set_pin(UART1_NUM, UART1_TX_PIN, UART1_RX_PIN, UART1_RTS_PIN, UART1_CTS_PIN);
     uart_set_pin(UART2_NUM, UART2_TX_PIN, UART2_RX_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-
 }
 
+/**
+ * @brief Main application entry point.
+ */
 void app_main() {
     ESP_LOGI(TAG, "Initializing UART bridge...");
 
@@ -143,4 +166,3 @@ void app_main() {
     xTaskCreate(uart_forward_task_uart1_to_uart2, "uart1_to_uart2_task", 4096, NULL, 10, NULL);
     xTaskCreate(uart_forward_task_uart2_to_uart1, "uart2_to_uart1_task", 4096, NULL, 10, NULL);
 }
-
