@@ -5,7 +5,14 @@
  * This implementation enables seamless communication between two UART ports,
  * using FreeRTOS tasks and queues for efficient data transfer. The design is fully event-driven,
  * reducing CPU usage by utilizing the ESP-IDF UART driver’s event queue mechanism.
- *
+ * 
+ * ## Performance Calculations
+ * - **Baud Rate:** 115200 bps
+ * - **Packet Size:** 8 bytes
+ * - **Bits per packet:** (8 data + 1 start + 1 stop) * 8 = 80 bits per packet
+ * - **Transmission Time per Packet:** 80 bits / 115200 bps ≈ 0.6944 ms
+ * - **Packets per second (ideal case):** ≈ 1440 packets/sec
+ * - **Max Theoretical Bandwidth:** 1440 packets/sec * 8 bytes = 11520 bytes/sec (~11.52 KB/s)
  *  * 
  * ## Queue Usage
  * - Two event queues (`uart1_event_queue`, `uart2_event_queue`) handle UART events.
@@ -77,13 +84,19 @@
  void uart_init() {
      ESP_LOGI(TAG, "Initializing UART...");
      
+     if (uart_is_driver_installed(UART1_NUM)) {
+        uart_driver_delete(UART1_NUM);
+    }
+    if (uart_is_driver_installed(UART2_NUM)) {
+        uart_driver_delete(UART2_NUM);
+    }
      uart_driver_install(UART1_NUM, BUF_SIZE * 2, BUF_SIZE * 2, 10, &uart1_event_queue, 0);
      uart_driver_install(UART2_NUM, BUF_SIZE * 2, BUF_SIZE * 2, 10, &uart2_event_queue, 0);
      
      uart_param_config(UART1_NUM, &(uart_config_t){
          .baud_rate = 115200,
          .data_bits = UART_DATA_8_BITS,
-         .parity = UART_PARITY_ODD,
+         .parity = UART_PARITY_DISABLE,
          .stop_bits = UART_STOP_BITS_1,
          .flow_ctrl = UART_HW_FLOWCTRL_CTS_RTS,
          .source_clk = UART_SCLK_DEFAULT,
@@ -91,7 +104,7 @@
      uart_param_config(UART2_NUM, &(uart_config_t){
         .baud_rate = 115200,
         .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_ODD,
+        .parity = UART_PARITY_DISABLE,
         .stop_bits = UART_STOP_BITS_1,
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
@@ -117,6 +130,10 @@ void init_uart_with_params(uart_port_t port, int baud_rate) {
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
     };
+    
+    if (uart_is_driver_installed(port)) {
+        uart_driver_delete(port);
+    }
 
     ESP_ERROR_CHECK(uart_driver_install(port, BUF_SIZE * 2, BUF_SIZE * 2, 0, NULL, 0));
     ESP_ERROR_CHECK(uart_param_config(port, &uart_config));
@@ -182,7 +199,6 @@ void init_uart_with_params(uart_port_t port, int baud_rate) {
  * @param target_baud_rate Desired baud rate (9600, 19200, etc.)
  * @param pin Bluetooth enable PIN
  * @param mode Bluetooth mode (0 = Slave, 1 = Master)
- * @param auto_connect Auto-connect mode (0 = Manual, 1 = Automatic)
  * @return Detected baud rate if successful, -1 if detection fails.
  */
 
@@ -192,8 +208,7 @@ int detect_and_configure_bt_module(
     const char *device_name,
     int target_baud_rate,
     const char *pin,
-    int mode,
-    int auto_connect
+    int mode
 ){
      int baudRates[] = {9600, 19200, 38400, 57600, 115200};
      uint8_t data[BUF_SIZE];
@@ -204,15 +219,25 @@ int detect_and_configure_bt_module(
          init_uart_with_params(port, baudRates[i]);
          vTaskDelay(pdMS_TO_TICKS(500));
  
+         #ifdef DEBUG
+         ESP_LOGI(TAG, "Trying baud rate: %d", baudRates[i]);
+         #endif
+
+         //empty buffer
+         uart_flush(port);
+         uart_read_bytes(port, data, BUF_SIZE, pdMS_TO_TICKS(100));
          // Send AT command
          const char *testCmd = "AT\r\n";
          uart_write_bytes(port, testCmd, strlen(testCmd));
-         vTaskDelay(pdMS_TO_TICKS(200));
+         vTaskDelay(pdMS_TO_TICKS(100));
  
-         int len = uart_read_bytes(port, data, BUF_SIZE, pdMS_TO_TICKS(100));
+         int len = uart_read_bytes(port, data, BUF_SIZE, pdMS_TO_TICKS(500));
          if (len > 0) {
              data[len] = '\0';
- 
+
+             #ifdef DEBUG
+             ESP_LOGI(TAG, "Received raw UART data: %s", (char *)data);  // Log raw data
+             #endif
              if (strstr((char *)data, "OK") != NULL) {
                  #ifdef DEBUG
                  ESP_LOGI(TAG, "Detected baud rate: %d", baudRates[i]);
@@ -221,37 +246,31 @@ int detect_and_configure_bt_module(
                  // Now configure the module
                  init_uart_with_params(port, baudRates[i]);
  
-                 // Set baud rate (JDY-31 & HC-05 compatible)
+                 // Set baud rate (JDY-31 & HC-05 compatible) AT+UART=115200,0,0
                  char baud_cmd[32];
-                 snprintf(baud_cmd, sizeof(baud_cmd), "AT+BAUD%d\r\n", (target_baud_rate / 1200) - 3);
+                 snprintf(baud_cmd, sizeof(baud_cmd), "AT+UART=%d,0,0\r\n", target_baud_rate);
                  send_at_command(port, baud_cmd, "OK");
  
                  // Set Bluetooth name
                  char name_cmd[32];
-                 snprintf(name_cmd, sizeof(name_cmd), "AT+NAME%s\r\n", device_name);
+                 snprintf(name_cmd, sizeof(name_cmd), "AT+NAME=%s\r\n", device_name);
                  send_at_command(port,name_cmd, "OK");
  
                  // Set PIN
                  char pin_cmd[32];
-                 snprintf(pin_cmd, sizeof(pin_cmd), "AT+PIN%s\r\n", pin);
+                 snprintf(pin_cmd, sizeof(pin_cmd), "AT+PIN=%s\r\n", pin);
                  send_at_command(port, pin_cmd, "OK");
  
                  // Set role (Slave/Master)
                  char role_cmd[16];
-                 snprintf(role_cmd, sizeof(role_cmd), "AT+ROLE%d\r\n", mode);
+                 snprintf(role_cmd, sizeof(role_cmd), "AT+ROLE=%d\r\n", mode);
                  send_at_command(port, role_cmd, "OK");
  
-                 // Set auto-connect
-                 char auto_cmd[16];
-                 snprintf(auto_cmd, sizeof(auto_cmd), "AT+AUTO%d\r\n", auto_connect);
-                 send_at_command(port, auto_cmd, "OK");
- 
+           
                  #ifdef DEBUG
                  ESP_LOGI(TAG, "Bluetooth module configured successfully!");
                  #endif
- 
-                 // Reinitialize UART with new baud rate
-                 init_uart_with_params(port, target_baud_rate);
+
                  exit_AT_mode(enable_pin);
                  return target_baud_rate;
              }
@@ -326,14 +345,13 @@ int detect_and_configure_bt_module(
  }
  
 
-
  /**
   * @brief Main application entry point
   */
  void app_main() {
      ESP_LOGI(TAG, "Initializing UART bridge...");
 
-     int configuredBaud = detect_and_configure_bt_module(UART2_NUM, UART2_BT_EN_PIN, "ESP32_BT", 115200, "1234", 0, 1);
+     int configuredBaud = detect_and_configure_bt_module(UART2_NUM, UART2_BT_EN_PIN, "ESP32_BT", 115200, "1234", 0);
     
      if (configuredBaud > 0) {
          #ifdef DEBUG
