@@ -89,6 +89,136 @@ void uart_init() {
         .flow_ctrl = UART_HW_FLOWCTRL_CTS_RTS,
         .source_clk = UART_SCLK_DEFAULT,
     });
+
+
+/**
+ * @brief Sends an AT command and verifies the response.
+ *
+ * @param cmd The AT command to send.
+ * @param expected_response The expected response string.
+ * @return true if the expected response is received, false otherwise.
+ */
+bool send_at_command(const char *cmd, const char *expected_response) {
+    uint8_t data[BUF_SIZE];
+
+    #ifdef DEBUG
+    ESP_LOGI(TAG, "Sending command: %s", cmd);
+    #endif
+
+    uart_write_bytes(UART_PORT, cmd, strlen(cmd));
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    int len = uart_read_bytes(UART_PORT, data, BUF_SIZE, pdMS_TO_TICKS(1000));
+    if (len > 0) {
+        data[len] = '\0';
+
+        #ifdef DEBUG
+        ESP_LOGI(TAG, "Received: %s", (char *)data);
+        #endif
+
+        return (strstr((char *)data, expected_response) != NULL);
+    }
+    return false;
+}
+
+/**
+ * @brief Enables AT mode on JDY-31 / HC-05 by pulling the ENABLE pin low.
+ */
+void enter_AT_mode() {
+    gpio_set_direction(ENABLE_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(ENABLE_PIN, 0); // Hold LOW to enter AT mode
+    vTaskDelay(pdMS_TO_TICKS(500));
+}
+
+/**
+ * @brief Exits AT mode by setting the ENABLE pin high.
+ */
+void exit_AT_mode() {
+    gpio_set_level(ENABLE_PIN, 1); // Set HIGH to exit AT mode
+    vTaskDelay(pdMS_TO_TICKS(500));
+}
+
+/**
+ * @brief Detects the baud rate of JDY-31 / HC-05 and configures Bluetooth parameters.
+ *
+ * @param port UART port (e.g., UART_NUM_1)
+ * @param device_name New Bluetooth device name
+ * @param target_baud_rate Desired baud rate (9600, 19200, etc.)
+ * @param pin Bluetooth enable PIN
+ * @param mode Bluetooth mode (0 = Slave, 1 = Master)
+ * @param auto_connect Auto-connect mode (0 = Manual, 1 = Automatic)
+ * @return Detected baud rate if successful, -1 if detection fails.
+ */
+int detect_and_configure_bt_module(uart_port_t port, const char *device_name, int target_baud_rate, const char *pin, int mode, int auto_connect) {
+    int baudRates[] = {9600, 19200, 38400, 57600, 115200};
+    uint8_t data[BUF_SIZE];
+
+    enter_AT_mode(); // Enter AT mode
+
+    for (int i = 0; i < (sizeof(baudRates) / sizeof(baudRates[0])); i++) {
+        init_uart(port, baudRates[i]);
+        vTaskDelay(pdMS_TO_TICKS(500));
+
+        // Send AT command
+        const char *testCmd = "AT\r\n";
+        uart_write_bytes(port, testCmd, strlen(testCmd));
+        vTaskDelay(pdMS_TO_TICKS(200));
+
+        int len = uart_read_bytes(port, data, BUF_SIZE, pdMS_TO_TICKS(100));
+        if (len > 0) {
+            data[len] = '\0';
+
+            if (strstr((char *)data, "OK") != NULL) {
+                #ifdef DEBUG
+                ESP_LOGI(TAG, "Detected baud rate: %d", baudRates[i]);
+                #endif
+
+                // Now configure the module
+                init_uart(port, baudRates[i]);
+
+                // Set baud rate (JDY-31 & HC-05 compatible)
+                char baud_cmd[32];
+                snprintf(baud_cmd, sizeof(baud_cmd), "AT+BAUD%d\r\n", (target_baud_rate / 1200) - 3);
+                send_at_command(baud_cmd, "OK");
+
+                // Set Bluetooth name
+                char name_cmd[32];
+                snprintf(name_cmd, sizeof(name_cmd), "AT+NAME%s\r\n", device_name);
+                send_at_command(name_cmd, "OK");
+
+                // Set PIN
+                char pin_cmd[32];
+                snprintf(pin_cmd, sizeof(pin_cmd), "AT+PIN%s\r\n", pin);
+                send_at_command(pin_cmd, "OK");
+
+                // Set role (Slave/Master)
+                char role_cmd[16];
+                snprintf(role_cmd, sizeof(role_cmd), "AT+ROLE%d\r\n", mode);
+                send_at_command(role_cmd, "OK");
+
+                // Set auto-connect
+                char auto_cmd[16];
+                snprintf(auto_cmd, sizeof(auto_cmd), "AT+AUTO%d\r\n", auto_connect);
+                send_at_command(auto_cmd, "OK");
+
+                #ifdef DEBUG
+                ESP_LOGI(TAG, "Bluetooth module configured successfully!");
+                #endif
+
+                // Reinitialize UART with new baud rate
+                init_uart(port, target_baud_rate);
+                exit_AT_mode();
+                return target_baud_rate;
+            }
+        }
+    }
+
+    exit_AT_mode();
+    #ifdef DEBUG
+    ESP_LOGE(TAG, "Failed to detect baud rate!");
+    #endif
+    return -1;
+}
     
     uart_param_config(UART2_NUM, &(uart_config_t){
         .baud_rate = 115200,
