@@ -34,7 +34,7 @@
  #include "driver/gpio.h"
  #include <string.h>
  
- #define BUF_SIZE (128)
+ #define BUF_SIZE (1024)
  #define UART1_NUM UART_NUM_1
  #define UART2_NUM UART_NUM_2
  
@@ -99,6 +99,7 @@
          .parity = UART_PARITY_DISABLE,
          .stop_bits = UART_STOP_BITS_1,
          .flow_ctrl = UART_HW_FLOWCTRL_CTS_RTS,
+         .rx_flow_ctrl_thresh = 122,
          .source_clk = UART_SCLK_DEFAULT,
      });
      uart_param_config(UART2_NUM, &(uart_config_t){
@@ -107,6 +108,7 @@
         .parity = UART_PARITY_DISABLE,
         .stop_bits = UART_STOP_BITS_1,
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .rx_flow_ctrl_thresh = 122,
         .source_clk = UART_SCLK_DEFAULT,
     });
     uart_set_pin(UART1_NUM, UART1_TX_PIN, UART1_RX_PIN, UART1_RTS_PIN, UART1_CTS_PIN);
@@ -258,14 +260,19 @@ int detect_and_configure_bt_module(
  
                  // Set PIN
                  char pin_cmd[32];
-                 snprintf(pin_cmd, sizeof(pin_cmd), "AT+PIN=%s\r\n", pin);
+                 snprintf(pin_cmd, sizeof(pin_cmd), "AT+PSWD=\"%s\"\r\n", pin);
                  send_at_command(port, pin_cmd, "OK");
  
                  // Set role (Slave/Master)
                  char role_cmd[16];
                  snprintf(role_cmd, sizeof(role_cmd), "AT+ROLE=%d\r\n", mode);
                  send_at_command(port, role_cmd, "OK");
- 
+
+                // exit 
+                //AT+RESET
+                char exit_cmd[16];
+                snprintf(exit_cmd, sizeof(exit_cmd), "AT+RESET\r\n");
+                send_at_command(port, exit_cmd, "OK");              
            
                  #ifdef DEBUG
                  ESP_LOGI(TAG, "Bluetooth module configured successfully!");
@@ -301,7 +308,7 @@ int detect_and_configure_bt_module(
      while (1) {
          if (xQueueReceive(event_queue, &event, portMAX_DELAY)) {
              if (event.type == UART_DATA && event.size > 0) {
-                 packet.len = uart_read_bytes(uart_num, packet.data, event.size, pdMS_TO_TICKS(10));
+                 packet.len = uart_read_bytes(uart_num, packet.data, event.size, 0);
                  if (packet.len > 0) {
                      xQueueSend(data_queue, &packet, portMAX_DELAY);
                  }
